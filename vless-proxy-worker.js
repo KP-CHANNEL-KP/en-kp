@@ -26,7 +26,7 @@ async function handleRequest(request) {
   // 'curl' မဟုတ်ဘဲ တခြားတစ်ခု (Browser လိုမျိုး) ဆိုရင် 403 Forbidden ပြန်ပေးပါမယ်
   if (!isAllowed) {
     // လူသားတွေကို Browser မှာ မြင်ရမယ့် စာသား
-    return new Response("Access Denied: This URL is for programmatic use only (curl).", { status: 403 });
+    return new Response("ဘားမှမသိချင်နဲ့ညီ အကို့မှာလဲ ညီ့ကိုပြစရာ ( လီး ) ပဲရှိတယ်။😎", { status: 403 });
   }
 
   // 2. 'curl' ဖြစ်ခဲ့ရင် Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
