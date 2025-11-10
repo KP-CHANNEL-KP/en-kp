@@ -13,7 +13,7 @@ const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-v
 // 🤖 curl command မှ လာသော request များသာ ခွင့်ပြုရန်
 const ALLOWED_USER_AGENTS = ['curl']; 
 // 🔑 License Key ကို KV ထဲမှာ ဘယ်လောက်ကြာကြာ IP နဲ့ သိမ်းထားမလဲ (စက္ကန့် - 1 နာရီ = 3600)
-const IP_EXPIRATION_TTL = 3600; 
+const IP_EXPIRATION_TTL = 31536000; 
 // KV Binding နာမည် (သင့် Dashboard မှာ LICENSES လို့ ချိတ်ထားရင် ဒီအတိုင်းထားပါ)
 const LICENSE_NAMESPACE = 'LICENSES'; 
 
