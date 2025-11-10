@@ -9,7 +9,7 @@
 // ----------------------------------------------------------------------
 const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-vless-2/main/check-expiry-and-run-v2.sh";
 const EXPIRY_LIST_URL = "https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/user_expiry_list.txt"; 
-const ADMIN_SECRET = "Koplm890@"; // 🚨 ဤနေရာတွင် သင်၏ လျှို့ဝှက် Admin Key ကို ပြောင်းလဲပါ။
+const ADMIN_SECRET = "Koplm890"; // 🚨 ဤနေရာတွင် သင်၏ လျှို့ဝှက် Admin Key ကို ပြောင်းလဲပါ။
 // ----------------------------------------------------------------------
 const ALLOWED_USER_AGENTS = ['curl']; 
 const IP_EXPIRATION_TTL = 31536000; // 1 နှစ်စာ (စက္ကန့်)
