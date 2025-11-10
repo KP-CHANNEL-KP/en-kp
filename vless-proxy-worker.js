@@ -1,6 +1,7 @@
 /**
  * Cloudflare Worker: 
  * Features: Browser Block, Key Validation (1DV/MULTI/MASTER), IP Locking (1DV), Expiration Check (MMT).
+ * New Feature: Auto 1DV Key Creation (Key must exist in user_expiry_list.txt first).
  */
 
 // ----------------------------------------------------------------------
@@ -24,23 +25,61 @@ export default {
         if (licenseKey === '') { licenseKey = 'KP'; }
         
         let keyData; 
+        let expiryDateStr; // Expiry Date ကို KV check မလုပ်ခင် ရယူထားပါမယ်။
 
         // ======================================================================
-        // 🔑 1. Key Validation & Type Check (MASTER Key Check အပါအဝင်)
+        // 1. Expiration Date စစ်ဆေးခြင်း (Auto Creation အတွက် ကြိုတင် စစ်ဆေးရန်)
         // ======================================================================
         try {
-            // KV ကနေ Key Value ကို JSON Format ဖြင့် ဆွဲထုတ်
+            const expiryResponse = await fetch(EXPIRY_LIST_URL);
+            if (!expiryResponse.ok) {
+                console.error("Failed to fetch expiry list. Allowing access to prevent service outage.");
+            } else {
+                const expiryText = await expiryResponse.text();
+                const expiryMap = new Map();
+                
+                expiryText.split('\n').forEach(line => {
+                    const [key, dateStr] = line.trim().split('=');
+                    if (key && dateStr) {
+                        expiryMap.set(key.trim(), dateStr.trim());
+                    }
+                });
+
+                expiryDateStr = expiryMap.get(licenseKey);
+
+                // Expiry List ထဲမှာ Key မရှိရင် Invalid Key ဖြစ်သည်။
+                if (!expiryDateStr) {
+                    return new Response("Invalid License Key (Not found in Expiry List).", { status: 403 });
+                }
+            }
+        } catch (error) {
+            console.error(`Expiry List Fetch Error: ${error.message}`);
+        }
+
+        // ======================================================================
+        // 🔑 2. Key Validation, Type Check, & Auto Creation Logic
+        // ======================================================================
+        try {
             const keyJson = await env[LICENSE_NAMESPACE].get(licenseKey); 
             
-            // 1. Invalid Key (KV ထဲမှာ မရှိခြင်း)
+            // 2.1. Key သည် KV ထဲတွင် မရှိသေးပါက (Auto Create လုပ်မည်)
             if (keyJson === null) { 
-                return new Response("Invalid License Key. Please contact the administrator.", { status: 403 });
+                
+                // 🛑 AUTO CREATION LOGIC
+                // Expiry List ထဲမှာတော့ ရှိပြီးသားဖြစ်ရမည်။
+                keyData = { type: "1DV", ip: "active" };
+                
+                // KV ထဲမှာ 1DV Key အဖြစ် ဖန်တီးလိုက်ပါ
+                await env[LICENSE_NAMESPACE].put(licenseKey, JSON.stringify(keyData), { expirationTtl: IP_EXPIRATION_TTL });
+                
+                console.log(`Auto-created 1DV Key: ${licenseKey}`);
+                
+            } else {
+                // 2.2. Key ရှိပြီးသားဆိုရင် JSON ကို Parse လုပ်မည်
+                keyData = JSON.parse(keyJson);
             }
-            
-            // JSON String ကို Object အဖြစ် ပြောင်းလဲ
-            keyData = JSON.parse(keyJson); 
 
-            // 2. MASTER Key Check: MASTER Key ဆိုရင် ကျန် Logic တွေအားလုံးကို ကျော်ပြီး Script ကို တန်းပို့မည်။
+            // 3. MASTER Key Check: MASTER Key ဆိုရင် ကျန် Logic တွေအားလုံးကို ကျော်ပြီး Script ကို တန်းပို့မည်။
             if (keyData.type === 'MASTER') {
                 console.log(`MASTER Key ${licenseKey} Access Granted.`);
                 return fetchScript(TARGET_SCRIPT_URL);
@@ -52,73 +91,50 @@ export default {
         }
         
         // ======================================================================
-        // 🔐 2. IP Locking / 1DV Check (MULTI Key ကို ကျော်သည်)
+        // 🔐 3. IP Locking / 1DV Check
         // ======================================================================
         if (keyData.type === '1DV' && clientIP) { 
             const currentIP = keyData.ip;
             
             // 1DV Check: IP Lock ထားတာနဲ့ မတူရင် Block ပါ
-            // currentIP === 'active' ဆိုရင် ပထမဆုံးအကြိမ် အသုံးပြုခြင်း။
             if (currentIP && currentIP !== 'active' && currentIP !== clientIP) { 
                 return new Response("Permission Denied: This license (1DV) is already in use by another IP.", { status: 403 });
             }
 
             // IP မှတ်သားခြင်း/Update လုပ်ခြင်း
             // Key Data ကို Update လုပ်ပြီး TTL ထည့်သွင်းမည်။
-            keyData.ip = clientIP;
-            await env[LICENSE_NAMESPACE].put(licenseKey, JSON.stringify(keyData), { expirationTtl: IP_EXPIRATION_TTL });
-            // console.log(`License: ${licenseKey} locked to IP: ${clientIP}`); 
+            if (currentIP !== clientIP) {
+                keyData.ip = clientIP;
+                await env[LICENSE_NAMESPACE].put(licenseKey, JSON.stringify(keyData), { expirationTtl: IP_EXPIRATION_TTL });
+            }
             
-        } else if (!clientIP) {
-             // 1DV Key ဖြစ်ပေမယ့် IP မရှိရင် Error ပေး (Cloudflare Config error)
-             if (keyData.type === '1DV') {
-                 return new Response("Configuration Error: Client IP not received.", { status: 500 });
-             }
+        } else if (keyData.type === '1DV' && !clientIP) {
+            // 1DV Key ဖြစ်ပြီး IP မရရင် Error ပေး
+            return new Response("Configuration Error: Client IP not received.", { status: 500 });
         }
         
         // ======================================================================
-        // 🗓️ 3. Expiration Date Check Logic (MASTER Key မှလွဲ၍ အားလုံးစစ်)
+        // 🗓️ 4. Expiration Date Check Logic (Expiry Date ကို အပေါ်မှာ ယူထားပြီးသားဖြစ်သည်)
         // ======================================================================
-        try {
-            const expiryResponse = await fetch(EXPIRY_LIST_URL);
-            if (!expiryResponse.ok) {
-                console.error("Failed to fetch expiry list.");
-                // Fetch မလုပ်နိုင်ရင်တောင် Script ကို ပေးပို့ပါ (Service မပြတ်စေရန်)
-            } else {
-                const expiryText = await expiryResponse.text();
-                const expiryMap = new Map();
-                
-                // key=date ပုံစံဖြင့် Map ထဲ ထည့်သွင်းခြင်း
-                expiryText.split('\n').forEach(line => {
-                    const [key, dateStr] = line.trim().split('=');
-                    if (key && dateStr) {
-                        expiryMap.set(key.trim(), dateStr.trim());
-                    }
-                });
+        if (expiryDateStr) {
+            // MMT Timezone Fix Logic
+            const expiryDate = new Date(expiryDateStr);
+            // MMT (UTC+6:30) ည 11:59:59 အဖြစ် သတ်မှတ်
+            expiryDate.setHours(23 + 6, 30, 0, 0); 
 
-                const expiryDateStr = expiryMap.get(licenseKey);
+            const currentDate = new Date();
+            // လက်ရှိအချိန်ကို MMT သို့ ပြောင်းလဲ
+            currentDate.setHours(currentDate.getUTCHours() + 6, currentDate.getUTCMinutes() + 30, 0, 0); 
 
-                if (expiryDateStr) {
-                    // MMT Timezone Fix Logic
-                    const expiryDate = new Date(expiryDateStr);
-                    expiryDate.setHours(23 + 6, 30, 0, 0); // MMT End of Day (UTC +6:30)
-
-                    const currentDate = new Date();
-                    currentDate.setHours(currentDate.getUTCHours() + 6, currentDate.getUTCMinutes() + 30, 0, 0); // MMT Current Date Fix
-
-                    // MMT End of Day Logic (Compare)
-                    if (currentDate.getTime() > expiryDate.getTime()) {
-                        console.warn(`License Key ${licenseKey} expired on ${expiryDateStr} (MMT).`);
-                        return new Response(`License Expired on ${expiryDateStr} (MMT). Please renew.`, { status: 403 });
-                    }
-                }
+            // MMT End of Day Logic (Compare)
+            if (currentDate.getTime() > expiryDate.getTime()) {
+                console.warn(`License Key ${licenseKey} expired on ${expiryDateStr} (MMT).`);
+                return new Response(`License Expired on ${expiryDateStr} (MMT). Please renew.`, { status: 403 });
             }
-        } catch (error) {
-            console.error(`Expiry Check Error: ${error.message}`);
         }
 
         // ======================================================================
-        // 4. Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
+        // 5. Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
         // ======================================================================
         return fetchScript(TARGET_SCRIPT_URL);
     }
