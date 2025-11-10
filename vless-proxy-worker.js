@@ -2,7 +2,7 @@
  * Cloudflare Worker: 
  * Features: Key Validation (1DV/MULTI/MASTER), IP Locking (1DV), Expiration Check (MMT).
  * New Features: Admin Tools for Key Creation & IP Reset (URL-based control).
- * FIX: Final fix for URL Parsing (path and segments logic).
+ * FIX: Final fix for URL Parsing and Expiry List Cache Bypass.
  */
 
 // ----------------------------------------------------------------------
@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------
 const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-vless-2/main/check-expiry-and-run-v2.sh";
 const EXPIRY_LIST_URL = "https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/user_expiry_list.txt"; 
-// 🚨 ပြင်ရမည်: သင့်ရဲ့ Admin Secret ကို Koplm890 လို့ ပြင်လိုက်ပါပြီ။
+// Admin Secret ကို Koplm890 လို့ ပြင်လိုက်ပါပြီ။
 const ADMIN_SECRET = "Koplm890"; 
 // ----------------------------------------------------------------------
 const ALLOWED_USER_AGENTS = ['curl']; 
@@ -172,9 +172,18 @@ async function handleUserValidation(licenseKey, clientIP, env) {
 // ======================================================================
 
 async function checkExpiryList(licenseKey) {
-    // ... (Function content is the same as before)
     try {
-        const expiryResponse = await fetch(EXPIRY_LIST_URL);
+        // 🛑 FIX: Cache ကို လုံးဝကျော်လွှားပြီး အသစ်ကိုသာ ဖတ်စေရန် Options ထည့်သွင်းခြင်း
+        const fetchOptions = {
+            cache: 'no-store', 
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        };
+
+        const expiryResponse = await fetch(EXPIRY_LIST_URL, fetchOptions);
         if (!expiryResponse.ok) {
             console.error("Failed to fetch expiry list.");
             return { exists: false, isExpired: false };
