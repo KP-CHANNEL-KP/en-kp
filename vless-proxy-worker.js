@@ -1,5 +1,3 @@
-
-
 /**
  * Cloudflare Worker: Blocks Browser access but allows curl commands.
  */
