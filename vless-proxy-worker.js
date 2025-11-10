@@ -1,5 +1,3 @@
-vless-proxy-worker.js
-
 /**
  * Cloudflare Worker: 
  * Features: Browser Block, Key Validation (1DV/MULTI/MASTER), IP Locking (1DV), Expiration Check (MMT).
@@ -44,12 +42,12 @@ export default {
 
             // 2. MASTER Key Check: MASTER Key ဆိုရင် ကျန် Logic တွေအားလုံးကို ကျော်ပြီး Script ကို တန်းပို့မည်။
             if (keyData.type === 'MASTER') {
-                console.log(MASTER Key ${licenseKey} Access Granted.);
+                console.log(`MASTER Key ${licenseKey} Access Granted.`);
                 return fetchScript(TARGET_SCRIPT_URL);
             }
 
         } catch (e) {
-            console.error(Key Parsing/Validation Error: ${e.message});
+            console.error(`Key Parsing/Validation Error: ${e.message}`);
             return new Response("An internal error occurred during key parsing or verification.", { status: 500 });
         }
         
@@ -69,9 +67,85 @@ export default {
             // Key Data ကို Update လုပ်ပြီး TTL ထည့်သွင်းမည်။
             keyData.ip = clientIP;
             await env[LICENSE_NAMESPACE].put(licenseKey, JSON.stringify(keyData), { expirationTtl: IP_EXPIRATION_TTL });
-            // console.log(License: ${licenseKey} locked to IP: ${clientIP}); 
+            // console.log(`License: ${licenseKey} locked to IP: ${clientIP}`); 
             
         } else if (!clientIP) {
              // 1DV Key ဖြစ်ပေမယ့် IP မရှိရင် Error ပေး (Cloudflare Config error)
              if (keyData.type === '1DV') {
                  return new Response("Configuration Error: Client IP not received.", { status: 500 });
+             }
+        }
+        
+        // ======================================================================
+        // 🗓️ 3. Expiration Date Check Logic (MASTER Key မှလွဲ၍ အားလုံးစစ်)
+        // ======================================================================
+        try {
+            const expiryResponse = await fetch(EXPIRY_LIST_URL);
+            if (!expiryResponse.ok) {
+                console.error("Failed to fetch expiry list.");
+                // Fetch မလုပ်နိုင်ရင်တောင် Script ကို ပေးပို့ပါ (Service မပြတ်စေရန်)
+            } else {
+                const expiryText = await expiryResponse.text();
+                const expiryMap = new Map();
+                
+                // key=date ပုံစံဖြင့် Map ထဲ ထည့်သွင်းခြင်း
+                expiryText.split('\n').forEach(line => {
+                    const [key, dateStr] = line.trim().split('=');
+                    if (key && dateStr) {
+                        expiryMap.set(key.trim(), dateStr.trim());
+                    }
+                });
+
+                const expiryDateStr = expiryMap.get(licenseKey);
+
+                if (expiryDateStr) {
+                    // MMT Timezone Fix Logic
+                    const expiryDate = new Date(expiryDateStr);
+                    expiryDate.setHours(23 + 6, 30, 0, 0); // MMT End of Day (UTC +6:30)
+
+                    const currentDate = new Date();
+                    currentDate.setHours(currentDate.getUTCHours() + 6, currentDate.getUTCMinutes() + 30, 0, 0); // MMT Current Date Fix
+
+                    // MMT End of Day Logic (Compare)
+                    if (currentDate.getTime() > expiryDate.getTime()) {
+                        console.warn(`License Key ${licenseKey} expired on ${expiryDateStr} (MMT).`);
+                        return new Response(`License Expired on ${expiryDateStr} (MMT). Please renew.`, { status: 403 });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Expiry Check Error: ${error.message}`);
+        }
+
+        // ======================================================================
+        // 4. Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
+        // ======================================================================
+        return fetchScript(TARGET_SCRIPT_URL);
+    }
+};
+
+/**
+ * Script ကို fetch လုပ်ပြီး response ပြန်ပို့သော Function
+ */
+async function fetchScript(url) {
+    const fetchOptions = {
+        redirect: 'follow',
+        cache: 'no-store' 
+    };
+
+    try {
+        let response = await fetch(url, fetchOptions);
+        
+        const headers = new Headers(response.headers);
+        headers.delete('x-served-by');
+        
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: headers
+        });
+        
+    } catch (error) {
+        return new Response(`Error fetching script: ${error.message}`, { status: 500 });
+    }
+}
