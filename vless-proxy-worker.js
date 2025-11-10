@@ -1,9 +1,8 @@
 /**
- * Cloudflare Worker: First-Use IP Locking + Custom Browser Block.
+ * Cloudflare Worker: First-Use IP Locking + Custom Browser Block (No Expiration Date).
  * REQUIRES KV BINDING: A KV Namespace (e.g., 'LICENSE_KEYS') must be bound as 'LICENSES'.
  */
 const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-vless-2/main/check-expiry-and-run-v2.sh";
-const LICENSE_DURATION_SECONDS = 30 * 24 * 60 * 60; // 30 ရက် သက်တမ်း (စက္ကန့်ဖြင့်)
 const CUSTOM_BLOCK_MESSAGE = "ဘားမှမသိချင်နဲ့ညီ အကို့မှာလဲ ညီ့ကိုပြစရာ ( လီး ) ပဲရှိတယ်။😎";
 
 // 🚨 ဤနေရာတွင် LICENSES ကို KV binding မှတစ်ဆင့် ရယူပါသည်။
@@ -34,8 +33,10 @@ async function handleRequest(request) {
   const storedIP = await LICENSES.get(licenseKey); 
 
   if (storedIP === null) {
-      // 4. Key အသစ်/သက်တမ်းကုန် Key ကို ပထမဆုံးအကြိမ် အသုံးပြုခြင်း (Locking)
-      await LICENSES.put(licenseKey, clientIP, { expirationTtl: LICENSE_DURATION_SECONDS });
+      // 4. Key ကို ပထမဆုံးအကြိမ် အသုံးပြုခြင်း (Locking)
+      // TTL မပါဝင်ပါ၊ သို့သော် KV က သူ့ဖာသာ 7 ရက် TTL အနည်းဆုံး ရှိနေနိုင်ပါသည်။
+      // သက်တမ်းကို သင့်ရဲ့ Script က ထိန်းချုပ်ပါလိမ့်မည်။
+      await LICENSES.put(licenseKey, clientIP); // 🚨 ExpirationTTL ကို ဖြုတ်လိုက်သည်။
       
   } else if (storedIP !== clientIP) {
       // 5. IP မတူပါက Block
