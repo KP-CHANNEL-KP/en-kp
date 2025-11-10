@@ -1,9 +1,8 @@
 /**
  * Cloudflare Worker: 
- * 1. Blocks Browser Access.
- * 2. Allows only 'curl' commands.
- * 3. Adds IP Locking (One Device Limit / 1DV) using KV Storage.
- * 4. Uses 'export default' for proper binding access (fixes 'LICENSES' error).
+ * 1. Blocks Browser Access (Only 'curl' allowed).
+ * 2. Key Validation (Only predefined Keys in KV can be used).
+ * 3. IP Locking (One Device Limit / 1DV) using KV Storage.
  */
 
 // ----------------------------------------------------------------------
@@ -13,12 +12,14 @@ const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-v
 // ----------------------------------------------------------------------
 // 🤖 curl command မှ လာသော request များသာ ခွင့်ပြုရန်
 const ALLOWED_USER_AGENTS = ['curl']; 
-// 🔑 License Key ကို KV ထဲမှာ ဘယ်လောက်ကြာကြာ သိမ်းထားမလဲ (စက္ကန့် - 1 နာရီ = 3600)
+// 🔑 License Key ကို KV ထဲမှာ ဘယ်လောက်ကြာကြာ IP နဲ့ သိမ်းထားမလဲ (စက္ကန့် - 1 နာရီ = 3600)
 const IP_EXPIRATION_TTL = 3600; 
+// KV Binding နာမည် (သင့် Dashboard မှာ LICENSES လို့ ချိတ်ထားရင် ဒီအတိုင်းထားပါ)
+const LICENSE_NAMESPACE = 'LICENSES'; 
 
 // Worker Bindings (env) ကို တိုက်ရိုက်ရယူနိုင်ဖို့ 'export default' ပုံစံကို သုံးခြင်း
 export default {
-    async fetch(request, env) { // env မှာ LICENSES binding ပါဝင်လာပါပြီ
+    async fetch(request, env) { 
         const userAgent = request.headers.get('User-Agent') || '';
 
         // ======================================================================
@@ -33,7 +34,7 @@ export default {
         }
 
         // ======================================================================
-        // 🔑 1DV (IP Locking) Logic ကို စစ်ဆေးပြီး IP ကို KV ထဲမှာ မှတ်သားပါ
+        // 🔑 Key Validation & IP Locking (1DV) Logic
         // ======================================================================
         const clientIP = request.headers.get("cf-connecting-ip");
         let licenseKey = request.url.split('/').pop(); 
@@ -43,30 +44,43 @@ export default {
             licenseKey = 'KP'; 
         }
         
-        // env.LICENSES ရှိမရှိ၊ IP နှင့် Key ရှိမရှိ စစ်ဆေးခြင်း
-        if (clientIP && licenseKey && env.LICENSES) { 
+        // KV Binding နှင့် IP/Key ရှိမရှိ စစ်ဆေးခြင်း
+        if (clientIP && licenseKey && env[LICENSE_NAMESPACE]) { 
             try {
-                // 1. KV ထဲက IP အဟောင်းကို ဖတ်ပါ
-                const storedIP = await env.LICENSES.get(licenseKey);
+                // KV ထဲက Key ရဲ့ Status/IP ကို ဖတ်ပါ
+                const keyStatus = await env[LICENSE_NAMESPACE].get(licenseKey); 
+                
+                // 1. Key Validation: KV ထဲမှာ ဒီ Key မရှိရင် Block ပါ
+                if (keyStatus === null) { 
+                    console.warn(`Attempted to use invalid license key: ${licenseKey}`);
+                    return new Response("Invalid License Key. Please contact the administrator.", { status: 403 });
+                }
 
-                if (storedIP && storedIP !== clientIP) {
-                    // 2. IP ကွာခြားနေရင် Block လုပ်ပါ
+                // 2. IP Locking (1DV) စစ်ဆေးခြင်း
+                // keyStatus !== 'active' (ပထမဆုံးအကြိမ်သုံးမဟုတ်) ဖြစ်ပြီး၊
+                // လက်ရှိ IP နဲ့လည်း မတူရင် Block ပါ။
+                if (keyStatus !== 'active' && keyStatus !== clientIP) { 
+                    console.warn(`Access Denied for Key: ${licenseKey}. Used by ${keyStatus}, current IP: ${clientIP}`);
                     return new Response("Permission Denied: This license is already in use by another IP. (1DV Active)", { status: 403 });
                 }
 
-                // 3. IP အသစ် သို့မဟုတ် IP တူရင် KV ထဲမှာ မှတ်သားပါ
-                await env.LICENSES.put(licenseKey, clientIP, { expirationTtl: IP_EXPIRATION_TTL });
-                // Log ထဲမှာ မှတ်သားထားခြင်း (Debugging အတွက်)
+                // 3. IP အသစ် သို့မဟုတ် IP တူရင် KV ထဲမှာ IP ကို မှတ်သားပါ
+                // 'active' ဆိုတဲ့ စာသားကို လက်ရှိ IP နဲ့ အစားထိုးသွားပါမယ်။
+                await env[LICENSE_NAMESPACE].put(licenseKey, clientIP, { expirationTtl: IP_EXPIRATION_TTL });
                 console.log(`License: ${licenseKey} locked to IP: ${clientIP}`); 
 
             } catch (e) {
-                // KV Operation မှာ Error တက်ခဲ့ရင် console မှာ ပြသပါ
+                // KV Operation မှာ Error တက်ခဲ့ရင်
                 console.error(`KV Operation Error for ${licenseKey}: ${e.message}`);
+                return new Response("An internal error occurred during key verification.", { status: 500 });
             }
-        } 
+        } else {
+            // Binding သို့မဟုတ် IP/Key မရှိခဲ့ရင် Block ပါ
+            return new Response("Configuration Error. Missing KV setup or Client IP.", { status: 500 });
+        }
         
         // ======================================================================
-        // 2. 'curl' ဖြစ်ခဲ့ရင် Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
+        // 4. Key မှန်ပြီး IP Lock အဆင်ပြေရင် Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
         // ======================================================================
         const fetchOptions = {
             redirect: 'follow',
