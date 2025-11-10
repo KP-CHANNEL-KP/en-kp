@@ -1,0 +1,13 @@
+# ==================================
+# Base Configuration (အခြေခံ Configuration)
+# ==================================
+name = "enkp"  # wrangler.jsonc က name ကို ယူသုံးထားပါတယ်။
+main = "vless-proxy-worker.js"
+compatibility_date = "2025-11-09"
+
+# ==================================
+# KV Namespace Binding
+# ==================================
+[[kv_namespaces]]
+binding = "LICENSES"
+id = "6a34b751daf34705bf1c95f05c31ec6b" 
