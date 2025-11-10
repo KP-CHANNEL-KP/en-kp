@@ -2,6 +2,7 @@
  * Cloudflare Worker: 
  * Features: Key Validation (1DV/MULTI/MASTER), IP Locking (1DV), Expiration Check (MMT).
  * New Features: Admin Tools for Key Creation & IP Reset (URL-based control).
+ * FIX: Final fix for URL Parsing (path and segments logic).
  */
 
 // ----------------------------------------------------------------------
@@ -9,7 +10,8 @@
 // ----------------------------------------------------------------------
 const TARGET_SCRIPT_URL = "https://raw.githubusercontent.com/KP-CHANNEL-KP/gcp-vless-2/main/check-expiry-and-run-v2.sh";
 const EXPIRY_LIST_URL = "https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/user_expiry_list.txt"; 
-const ADMIN_SECRET = "Koplm890"; // 🚨 ဤနေရာတွင် သင်၏ လျှို့ဝှက် Admin Key ကို ပြောင်းလဲပါ။
+// 🚨 ပြင်ရမည်: သင့်ရဲ့ Admin Secret ကို Koplm890 လို့ ပြင်လိုက်ပါပြီ။
+const ADMIN_SECRET = "Koplm890"; 
 // ----------------------------------------------------------------------
 const ALLOWED_USER_AGENTS = ['curl']; 
 const IP_EXPIRATION_TTL = 31536000; // 1 နှစ်စာ (စက္ကန့်)
@@ -17,7 +19,12 @@ const LICENSE_NAMESPACE = 'LICENSES';
 
 export default {
     async fetch(request, env) { 
-        const urlSegments = request.url.split('/').filter(segment => segment.length > 0 && !segment.startsWith('https:'));
+        
+        // 🛑 FIX: URL Path ကို တိကျစွာ ပိုင်းခြားယူခြင်း
+        const url = new URL(request.url);
+        const path = url.pathname; 
+        const urlSegments = path.split('/').filter(segment => segment.length > 0);
+        
         
         // ======================================================================
         // 🔑 1. ADMIN TOOL DISPATCHER (URL ပုံစံ: /ACTION/SECRET/TARGET)
@@ -65,7 +72,7 @@ async function handleAdminTool(action, targetKey, env) {
             // 1. Key ကို Expiry List မှာ စစ်ဆေးရန် (လုံခြုံမှုအတွက်)
             const expiryCheck = await checkExpiryList(targetKey);
             if (!expiryCheck.exists) {
-                 return new Response(`Key Creation Failed: ${targetKey} not found in Expiry List.`, { status: 403 });
+                 return new Response(`Key Creation Failed: ${targetKey} not found in Expiry List. Key must exist there first.`, { status: 403 });
             }
 
             // 2. KV မှာ Key ရှိပြီးသားဆိုရင် ပြန်မဖန်တီးပါ
@@ -116,7 +123,7 @@ async function handleUserValidation(licenseKey, clientIP, env) {
         
         // Key Must Exist in KV (Auto Creation Logic ကို Admin Tool သို့ ရွှေ့လိုက်ပြီ)
         if (keyJson === null) { 
-            return new Response("Invalid License Key. Please contact the administrator (Key not found in KV).", { status: 403 });
+            return new Response("Invalid License Key (Key not found in KV).", { status: 403 });
         }
         
         keyData = JSON.parse(keyJson); 
@@ -150,10 +157,8 @@ async function handleUserValidation(licenseKey, clientIP, env) {
     
     // 4. Expiration Date Check Logic
     const expiryCheck = await checkExpiryList(licenseKey);
-    if (!expiryCheck.exists) {
-        // Expiry List မရှိရင်တောင် KV မှာရှိတဲ့အတွက် ရုတ်တရက် Block မလုပ်ဘဲ
-        // Expiry List Fetch Error ကိုသာ Log ထုတ်ပါ
-    } else if (expiryCheck.isExpired) {
+    
+    if (expiryCheck.exists && expiryCheck.isExpired) {
         return new Response(`License Expired on ${expiryCheck.expiryDateStr} (MMT). Please renew.`, { status: 403 });
     }
 
@@ -167,6 +172,7 @@ async function handleUserValidation(licenseKey, clientIP, env) {
 // ======================================================================
 
 async function checkExpiryList(licenseKey) {
+    // ... (Function content is the same as before)
     try {
         const expiryResponse = await fetch(EXPIRY_LIST_URL);
         if (!expiryResponse.ok) {
@@ -215,7 +221,6 @@ async function fetchScript(url) {
         redirect: 'follow',
         cache: 'no-store' 
     };
-    // ... (Function content is the same as before)
     try {
         let response = await fetch(url, fetchOptions);
         const headers = new Headers(response.headers);
