@@ -3,6 +3,7 @@
  * 1. Blocks Browser Access.
  * 2. Allows only 'curl' commands.
  * 3. Adds IP Locking (One Device Limit / 1DV) using KV Storage.
+ * 4. Uses 'export default' for proper binding access (fixes 'LICENSES' error).
  */
 
 // ----------------------------------------------------------------------
@@ -15,85 +16,78 @@ const ALLOWED_USER_AGENTS = ['curl'];
 // 🔑 License Key ကို KV ထဲမှာ ဘယ်လောက်ကြာကြာ သိမ်းထားမလဲ (စက္ကန့် - 1 နာရီ = 3600)
 const IP_EXPIRATION_TTL = 3600; 
 
-// addEventListener မှာ event.env (KV Bindings) ကို handleRequest ထဲကို ပို့ပေးဖို့ ပြင်ဆင်ခြင်း
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request, event.env)); 
-});
+// Worker Bindings (env) ကို တိုက်ရိုက်ရယူနိုင်ဖို့ 'export default' ပုံစံကို သုံးခြင်း
+export default {
+    async fetch(request, env) { // env မှာ LICENSES binding ပါဝင်လာပါပြီ
+        const userAgent = request.headers.get('User-Agent') || '';
 
-// env (Bindings) ကို ဒုတိယ parameter အနေနဲ့ လက်ခံရယူပါ
-async function handleRequest(request, env) { 
-  const userAgent = request.headers.get('User-Agent') || '';
+        // ======================================================================
+        // 1. User-Agent စစ်ဆေးခြင်း: Browser တွေကို Block လုပ်ပါ။
+        // ======================================================================
+        const isAllowed = ALLOWED_USER_AGENTS.some(agent => 
+            userAgent.toLowerCase().includes(agent.toLowerCase())
+        );
 
-  // ======================================================================
-  // 1. User-Agent စစ်ဆေးခြင်း: Browser တွေကို Block လုပ်ပါ။
-  // ======================================================================
-  const isAllowed = ALLOWED_USER_AGENTS.some(agent => 
-    userAgent.toLowerCase().includes(agent.toLowerCase())
-  );
+        if (!isAllowed) {
+            return new Response("ဘားမှမသိချင်နဲ့ညီ အကိုမှလဲ ညီ့ကိုပြစရာ (လီး) ပဲရှိတယ်။😎", { status: 403 });
+        }
 
-  // 'curl' မဟုတ်ရင် 403 Forbidden ပြန်ပေးပါမယ်
-  if (!isAllowed) {
-    return new Response("ဘားမှမသိချင်နဲ့ညီ အကိုမှလဲ ညီ့ကိုပြစရာ (လီး) ပဲရှိတယ်။😎", { status: 403 });
-  }
+        // ======================================================================
+        // 🔑 1DV (IP Locking) Logic ကို စစ်ဆေးပြီး IP ကို KV ထဲမှာ မှတ်သားပါ
+        // ======================================================================
+        const clientIP = request.headers.get("cf-connecting-ip");
+        let licenseKey = request.url.split('/').pop(); 
+        
+        // URL နောက်ဆုံးအပိုင်း ဗလာဖြစ်နေရင် 'KP' ကို Default အဖြစ် သတ်မှတ်
+        if (licenseKey === '') {
+            licenseKey = 'KP'; 
+        }
+        
+        // env.LICENSES ရှိမရှိ၊ IP နှင့် Key ရှိမရှိ စစ်ဆေးခြင်း
+        if (clientIP && licenseKey && env.LICENSES) { 
+            try {
+                // 1. KV ထဲက IP အဟောင်းကို ဖတ်ပါ
+                const storedIP = await env.LICENSES.get(licenseKey);
 
-  // ======================================================================
-  // 🔑 1DV (IP Locking) Logic ကို စစ်ဆေးပြီး IP ကို KV ထဲမှာ မှတ်သားပါ
-  // ======================================================================
+                if (storedIP && storedIP !== clientIP) {
+                    // 2. IP ကွာခြားနေရင် Block လုပ်ပါ
+                    return new Response("Permission Denied: This license is already in use by another IP. (1DV Active)", { status: 403 });
+                }
 
-  const clientIP = request.headers.get("cf-connecting-ip");
-  // URL ရဲ့ နောက်ဆုံးအပိုင်း (e.g., /KP) ကို License Key အဖြစ်ယူပါ။
-  let licenseKey = request.url.split('/').pop(); 
-  
-  // URL မှာ /KP မပါရင်တောင် (e.g., / မှာ ရပ်သွားရင်) licenseKey ကို 'KP' အဖြစ် သတ်မှတ်
-  if (licenseKey === '') {
-      licenseKey = 'KP'; 
-  }
-  
-  // KV Binding (LICENSES)၊ IP နှင့် Key ရှိမရှိ စစ်ဆေးခြင်း
-  if (clientIP && licenseKey && env.LICENSES) {
-      try {
-          // 1. KV ထဲက IP အဟောင်းကို ဖတ်ပါ
-          const storedIP = await env.LICENSES.get(licenseKey);
+                // 3. IP အသစ် သို့မဟုတ် IP တူရင် KV ထဲမှာ မှတ်သားပါ
+                await env.LICENSES.put(licenseKey, clientIP, { expirationTtl: IP_EXPIRATION_TTL });
+                // Log ထဲမှာ မှတ်သားထားခြင်း (Debugging အတွက်)
+                console.log(`License: ${licenseKey} locked to IP: ${clientIP}`); 
 
-          if (storedIP && storedIP !== clientIP) {
-              // 2. IP ကွာခြားနေပြီး အရင်က သုံးထားသူရှိရင် Block လုပ်ပါ။
-              // Log ထဲမှာ မှတ်သားထားခြင်း (Debugging အတွက်)
-              console.warn(`Access Denied for Key: ${licenseKey}. Used by ${storedIP}, current IP: ${clientIP}`);
-              return new Response("Permission Denied: This license is already in use by another IP. (1DV Active)", { status: 403 });
-          }
+            } catch (e) {
+                // KV Operation မှာ Error တက်ခဲ့ရင် console မှာ ပြသပါ
+                console.error(`KV Operation Error for ${licenseKey}: ${e.message}`);
+            }
+        } 
+        
+        // ======================================================================
+        // 2. 'curl' ဖြစ်ခဲ့ရင် Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
+        // ======================================================================
+        const fetchOptions = {
+            redirect: 'follow',
+            cache: 'no-store' 
+        };
 
-          // 3. IP အသစ် သို့မဟုတ် IP တူရင် KV ထဲမှာ မှတ်သားပါ။
-          await env.LICENSES.put(licenseKey, clientIP, { expirationTtl: IP_EXPIRATION_TTL });
-          console.log(`License: ${licenseKey} locked to IP: ${clientIP}`); 
-
-      } catch (e) {
-          // KV Operation မှာ Error တက်ခဲ့ရင်တောင် Script ကို ပိတ်မပစ်ဘဲ ရှေ့ဆက်ခွင့်ပြုပါ
-          console.error(`KV Error for ${licenseKey}: ${e.message}`);
-      }
-  } 
-
-  // ======================================================================
-
-  // 2. 'curl' ဖြစ်ခဲ့ရင် Script Content ကို တောင်းယူပြီး ပေးပို့ပါမယ်။
-  const fetchOptions = {
-    redirect: 'follow',
-    cache: 'no-store' 
-  };
-
-  try {
-    let response = await fetch(TARGET_SCRIPT_URL, fetchOptions);
-    
-    // Response Headers တွေကို သန့်ရှင်းရေးလုပ်ခြင်း
-    const headers = new Headers(response.headers);
-    headers.delete('x-served-by');
-    
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: headers
-    });
-    
-  } catch (error) {
-    return new Response(`Error fetching script: ${error.message}`, { status: 500 });
-  }
-}
+        try {
+            let response = await fetch(TARGET_SCRIPT_URL, fetchOptions);
+            
+            // Response Headers တွေကို သန့်ရှင်းရေးလုပ်ခြင်း
+            const headers = new Headers(response.headers);
+            headers.delete('x-served-by');
+            
+            return new Response(response.body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: headers
+            });
+            
+        } catch (error) {
+            return new Response(`Error fetching script: ${error.message}`, { status: 500 });
+        }
+    }
+};
